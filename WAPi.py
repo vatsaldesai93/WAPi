@@ -1,9 +1,5 @@
 #!/usr/bin/python -tt
 
-#Author:	Vatsal Ajay Desai
-#Contact:	vatsaldesai93@gmail.com
-#Version:	1.0
-
 import subprocess,os,sys,netifaces,time,shutil
 from pathlib import Path
 from netfilter.rule import Rule,Match
@@ -92,10 +88,21 @@ def configHostapd(apip):
 	with open('/etc/hostapd/hostapd.conf','w') as f:
 		f.writelines(data)
 
+	with open('/etc/network/interfaces','r') as f:
+		data=f.readlines()
+	for n,line in enumerate(data):
+		if line.startswith('iface '):
+			data[n] = '#'+line
+	with open('/etc/network/interfaces','w') as f:
+		f.writelines(data)
+
+
 def runHostapd():
 	subprocess.call("ifconfig wlan0 " + apip, shell=True)
 	time.sleep(2)
 	subprocess.call("service dnsmasq restart", shell=True)
+	time.sleep(2)
+	subprocess.call("service dhcpcd restart", shell=True)
 	time.sleep(2)
 	subprocess.call("nohup hostapd -d /etc/hostapd/hostapd.conf > /dev/null 2>&1 &", shell=True)
 	return
@@ -105,12 +112,26 @@ def setup_firewall_rules():
 	filtable=Table('filter')
 
 	filtable.set_policy('FORWARD','ACCEPT')
+	filtable.set_policy('INPUT','ACCEPT')
+	filtable.set_policy('OUTPUT','ACCEPT')
 
 	nattable.flush_chain('POSTROUTING')
 	filtable.flush_chain('FORWARD')
 	filtable.flush_chain('OUTPUT')
 	filtable.flush_chain('INPUT')
 	#nattable.delete_chain()
+
+	rulessh=Rule(
+		protocol='tcp',
+		matches=[Match('tcp', '--dport 22')],
+		jump='ACCEPT')
+	filtable.append_rule('INPUT',rulessh)
+
+	rulehttp=Rule(
+		protocol='tcp',
+		matches=[Match('tcp', '--dport 80')],
+		jump='ACCEPT')
+	filtable.append_rule('INPUT',rulehttp)
 
 	rule1=Rule(
 		out_interface='eth0',
@@ -136,9 +157,14 @@ def setup_firewall_rules():
 	filtable.append_rule('OUTPUT',rule4)
 
 	rule5=Rule(
+		out_interface='eth0',
+		jump='ACCEPT')
+	filtable.append_rule('OUTPUT',rule5)
+
+	rule6=Rule(
 		in_interface='wlan0',
 		jump='ACCEPT')
-	filtable.append_rule('INPUT',rule5)
+	filtable.append_rule('INPUT',rule6)
 
 	with open('/etc/sysctl.conf','r') as f:
 		data=f.readlines()
@@ -158,9 +184,14 @@ def revertFileChanges():
 
 	with open('/etc/dhcpcd.conf','r') as f:
 		data=f.readlines()
+
+	set_denyiface=False
 	for n,line in enumerate(data):
-		if (line.startswith('#denyinterfaces ') or line.startswith('denyinterfaces ')):
-			data[n] = '#denyinterfaces\n'
+		if (line.startswith('#denyinterfaces ') or line.startswith('denyinterfaces ')) and not set_denyiface:
+			data[n] = '#denyinterfaces \n'
+			set_denyiface=True
+	if not set_denyiface:
+		data.append('#denyinterfaces \n')
 	with open('/etc/dhcpcd.conf','w') as f:
 		f.writelines(data)
 
@@ -172,6 +203,14 @@ def revertFileChanges():
 	with open('/etc/sysctl.conf','w') as f:
 		f.writelines(data)
 
+	with open('/etc/network/interfaces','r') as f:
+		data=f.readlines()
+	for n,line in enumerate(data):
+		if line.startswith('#iface '):
+			data[n] = line[1:]
+	with open('/etc/network/interfaces','w') as f:
+		f.writelines(data)
+
 	with open('/proc/sys/net/ipv4/ip_forward','w') as f:
 		f.writelines('0')
 	return
@@ -181,17 +220,33 @@ def revertFirewall():
 	filtable=Table('filter')
 
 	filtable.set_policy('FORWARD','ACCEPT')
+	filtable.set_policy('INPUT','ACCEPT')
+	filtable.set_policy('OUTPUT','ACCEPT')
 
 	nattable.flush_chain('POSTROUTING')
 	filtable.flush_chain('FORWARD')
 	filtable.flush_chain('OUTPUT')
 	filtable.flush_chain('INPUT')
 	#nattable.delete_chain()
+
+	rulessh=Rule(
+		protocol='tcp',
+		matches=[Match('tcp', '--dport 22')],
+		jump='ACCEPT')
+	filtable.append_rule('INPUT',rulessh)
+
+	rulehttp=Rule(
+		protocol='tcp',
+		matches=[Match('tcp', '--dport 80')],
+		jump='ACCEPT')
+	filtable.append_rule('INPUT',rulehttp)
+
 	return
 
 def stopServicesDaemons():
 	subprocess.call("service hostapd stop", shell = True)
 	subprocess.call("service dnsmasq stop", shell = True)
+#	subprocess.call("service dhcpcd stop", shell = True)
 	pid_hostapd = subprocess.Popen("pgrep hostapd", shell=True, stdout=subprocess.PIPE).communicate()[0].split()
 	for pid in pid_hostapd:
 		subprocess.call("kill -9 "+pid, shell=True)
@@ -202,6 +257,8 @@ def removePackages():
 	return
 
 def resetInterface():
+	subprocess.call("ifup wlan0", shell = True)
+	time.sleep(2)
 	subprocess.call("ifdown wlan0", shell = True)
 	time.sleep(2)
 	subprocess.call("ifup wlan0", shell = True)
