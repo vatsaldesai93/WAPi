@@ -13,7 +13,6 @@
   * Python-Shutil
 
 ### To do
-  * Add comments to the main script
   * Add options to reload or reconfigure Hotspot
   * Daemonize WAPi
   * Replace Pathlib, Netifaces, Shutil with native commands  

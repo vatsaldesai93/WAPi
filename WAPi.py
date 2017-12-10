@@ -4,6 +4,7 @@ import subprocess,os,sys,netifaces,time,shutil
 from pathlib import Path
 from netfilter.rule import Rule,Match
 from netfilter.table import Table
+import firewalliot
 
 def getInstallationFiles():
 	subprocess.call("apt install -y hostapd dnsmasq", shell=True)
@@ -47,9 +48,9 @@ def configHostapd(apip):
 	set_dnsserver=False
 	for n,line in enumerate(data):
 		if line.startswith('#interface=') or line.startswith('interfaces='):
-			data[n] = 'interface=wlan0\n'
+			data[n] = 'interface=wlan0\n' #interface=lo\n'
 		elif line.startswith('#listen-address=') or line.startswith('listen-address='):
-			data[n] = 'listen-address='+apip+'\n'
+			data[n] = 'listen-address='+apip+'\n' #listen-address=127.0.0.1\n'
 		elif line.startswith('#bind-interfaces'):
 			data[n] = 'bind-interfaces\n'
 		elif line.startswith('#domain-needed'):
@@ -107,65 +108,7 @@ def runHostapd():
 	subprocess.call("nohup hostapd -d /etc/hostapd/hostapd.conf > /dev/null 2>&1 &", shell=True)
 	return
 
-def setup_firewall_rules():
-	nattable=Table('nat')
-	filtable=Table('filter')
-
-	filtable.set_policy('FORWARD','ACCEPT')
-	filtable.set_policy('INPUT','ACCEPT')
-	filtable.set_policy('OUTPUT','ACCEPT')
-
-	nattable.flush_chain('POSTROUTING')
-	filtable.flush_chain('FORWARD')
-	filtable.flush_chain('OUTPUT')
-	filtable.flush_chain('INPUT')
-	#nattable.delete_chain()
-
-	rulessh=Rule(
-		protocol='tcp',
-		matches=[Match('tcp', '--dport 22')],
-		jump='ACCEPT')
-	filtable.append_rule('INPUT',rulessh)
-
-	rulehttp=Rule(
-		protocol='tcp',
-		matches=[Match('tcp', '--dport 80')],
-		jump='ACCEPT')
-	filtable.append_rule('INPUT',rulehttp)
-
-	rule1=Rule(
-		out_interface='eth0',
-		jump='MASQUERADE')
-	nattable.append_rule('POSTROUTING',rule1)
-
-	rule2=Rule(
-		in_interface='eth0',
-		out_interface='wlan0',
-		jump='ACCEPT',
-		matches=[Match('state','--state RELATED,ESTABLISHED')])
-	filtable.append_rule('FORWARD',rule2)
-
-	rule3=Rule(
-		in_interface='wlan0',
-		out_interface='eth0',
-		jump='ACCEPT')
-	filtable.append_rule('FORWARD',rule3)
-
-	rule4=Rule(
-		out_interface='wlan0',
-		jump='ACCEPT')
-	filtable.append_rule('OUTPUT',rule4)
-
-	rule5=Rule(
-		out_interface='eth0',
-		jump='ACCEPT')
-	filtable.append_rule('OUTPUT',rule5)
-
-	rule6=Rule(
-		in_interface='wlan0',
-		jump='ACCEPT')
-	filtable.append_rule('INPUT',rule6)
-
+def setup_ipforward_rules():
 	with open('/etc/sysctl.conf','r') as f:
 		data=f.readlines()
 	for n,line in enumerate(data):
@@ -215,34 +158,6 @@ def revertFileChanges():
 		f.writelines('0')
 	return
 
-def revertFirewall():
-	nattable=Table('nat')
-	filtable=Table('filter')
-
-	filtable.set_policy('FORWARD','ACCEPT')
-	filtable.set_policy('INPUT','ACCEPT')
-	filtable.set_policy('OUTPUT','ACCEPT')
-
-	nattable.flush_chain('POSTROUTING')
-	filtable.flush_chain('FORWARD')
-	filtable.flush_chain('OUTPUT')
-	filtable.flush_chain('INPUT')
-	#nattable.delete_chain()
-
-	rulessh=Rule(
-		protocol='tcp',
-		matches=[Match('tcp', '--dport 22')],
-		jump='ACCEPT')
-	filtable.append_rule('INPUT',rulessh)
-
-	rulehttp=Rule(
-		protocol='tcp',
-		matches=[Match('tcp', '--dport 80')],
-		jump='ACCEPT')
-	filtable.append_rule('INPUT',rulehttp)
-
-	return
-
 def stopServicesDaemons():
 	subprocess.call("service hostapd stop", shell = True)
 	subprocess.call("service dnsmasq stop", shell = True)
@@ -276,12 +191,13 @@ if __name__ == "__main__":
 		time.sleep(2)
 		getInstallationFiles()
 		configHostapd(apip)
-		setup_firewall_rules()
+		firewalliot.allow_rules()
+		setup_ipforward_rules()
 		runHostapd()
 
 	elif sys.argv[1] == 'uninstall':
 		revertFileChanges()
-		revertFirewall()
+		firewalliot.block_rules()
 		stopServicesDaemons()
 		removePackages()
 		resetInterface()
